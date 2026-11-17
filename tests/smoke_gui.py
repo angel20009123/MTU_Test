@@ -36,5 +36,26 @@ try:
     assert app.report['result']['mtu'] == 1500, app.report
     assert app.report['result']['state'] == 'lower_bound'
     print('MTU test:', app.status.get())
+    app.protocol_version.set('IPv6')
+    app.protocol_changed()
+    app.diagnostic_preset()
+    app.values['sizes'].set('1600,1800,20000,65500')
+    app.values['lower'].set('1280')
+    app.start('packets')
+    wait_done()
+    assert len(app.probes) == 8, app.report
+    assert all(p.status == 'ok' and p.ip_version == 6 for p in app.probes), app.probes
+    assert app.probes[0].packet_size == 1648
+    assert app.report['parameters']['ip_version'] == 6
+    assert '65548' in app.status.get(), app.status.get()
+    print('IPv6 packet test:', app.summary.get())
+    app.values['upper'].set('2000')
+    app.start('mtu')
+    wait_done()
+    if app.report['result']['state'] == 'error':
+        assert '管理员权限' in app.status.get()
+    else:
+        assert app.report['result']['mtu'] == 2000, app.report
+    print('IPv6 MTU:', app.status.get())
 finally:
     app.close()

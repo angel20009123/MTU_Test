@@ -47,6 +47,12 @@ def main():
         date = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
         heading, body = original.split("\n", 1)
         changelog.write_text(f"{heading}\n\n## {version} — {date}\n\n- {args.message.strip()}\n{body}", encoding="utf-8")
+        readme = ROOT / 'README.md'
+        if readme.exists():
+            text = readme.read_text(encoding='utf-8')
+            text = text.replace(f'当前版本 **{current}**', f'当前版本 **{version}**')
+            text = text.replace(f'MTU_Link_Tester_v{current}.exe', f'MTU_Link_Tester_v{version}.exe')
+            readme.write_text(text, encoding='utf-8')
     run(sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v")
     run(sys.executable, "tests/smoke_gui.py")
     run(sys.executable, "build.py")

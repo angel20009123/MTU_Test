@@ -7,7 +7,7 @@ from pathlib import Path
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from mtu_core import WindowsPing, discover_mtu, summarize
+from mtu_core import WindowsPing, WindowsIPv6Ping, WindowsIPv6MTU, discover_mtu, summarize
 from version import VERSION
 
 
@@ -15,8 +15,8 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"链路实验室 v{VERSION} · MTU 与数据包测试")
-        self.geometry("1160x860")
-        self.minsize(1050, 780)
+        self.geometry("1200x920")
+        self.minsize(1100, 850)
         icon = Path(__file__).resolve().parent / "assets" / "link_lab.ico"
         if icon.exists():
             self.iconbitmap(str(icon))
@@ -33,7 +33,15 @@ class App(tk.Tk):
         outer = ttk.Frame(self, padding=22)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text=f"链路实验室  v{VERSION}", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(outer, text="IPv4 路径 MTU 探测 / 数据包大小、丢包率与延迟测试").pack(anchor="w", pady=(4, 16))
+        ttk.Label(outer, text="IPv4 / IPv6 路径 MTU 探测 · 数据包大小、丢包率与延迟测试").pack(anchor="w", pady=(4, 12))
+        protocol_row = ttk.Frame(outer)
+        protocol_row.pack(fill='x', pady=(0, 10))
+        ttk.Label(protocol_row, text="IP 协议：").pack(side='left')
+        self.protocol_version = tk.StringVar(value='IPv4')
+        self.protocol_box = ttk.Combobox(protocol_row, textvariable=self.protocol_version, values=('IPv4', 'IPv6'), state='readonly', width=10)
+        self.protocol_box.pack(side='left', padx=6)
+        self.protocol_box.bind('<<ComboboxSelected>>', self.protocol_changed)
+        ttk.Label(protocol_row, text="IPv6 支持地址 / 域名；链路本地地址示例 fe80::1%12").pack(side='left', padx=8)
         box = ttk.LabelFrame(outer, text="测试参数", padding=12)
         box.pack(fill="x")
         self.values = {}
@@ -52,12 +60,14 @@ class App(tk.Tk):
             self.values[key] = var
             ttk.Entry(cell, textvariable=var, width=24).pack(fill="x", pady=(5, 0))
         self.df = tk.BooleanVar(value=False)
-        ttk.Checkbutton(box, text="数据包测试禁止分片（DF）；MTU 探测始终启用 DF", variable=self.df).grid(row=2, column=0, columnspan=4, sticky="w", pady=7)
+        self.df_check = ttk.Checkbutton(box, text="IPv4 数据包测试禁止分片（DF）；IPv6 普通 Ping 由系统管理源端分片", variable=self.df)
+        self.df_check.grid(row=2, column=0, columnspan=4, sticky="w", pady=7)
         presets = ttk.Frame(box)
         presets.grid(row=3, column=0, columnspan=4, sticky="ew")
         ttk.Button(presets, text="大包预设：20K–65.5K", command=lambda: self.preset(True)).pack(side="left")
         ttk.Button(presets, text="常规包预设", command=lambda: self.preset(False)).pack(side="left", padx=8)
-        ttk.Label(presets, text="支持 0–65500 B 负载；大包默认允许 IP 分片").pack(side="left")
+        ttk.Button(presets, text="1600–1800 B 诊断", command=self.diagnostic_preset).pack(side='left')
+        ttk.Label(presets, text="负载范围 0–65500 B").pack(side="left", padx=8)
         actions = ttk.Frame(outer)
         actions.pack(fill="x", pady=12)
         self.mtu_button = ttk.Button(actions, text="探测路径 MTU", command=lambda: self.start("mtu"))
@@ -77,7 +87,7 @@ class App(tk.Tk):
         notebook.add(frame, text="逐包明细")
         columns = ("seq", "payload", "packet", "status", "rtt", "detail")
         self.table = ttk.Treeview(frame, columns=columns, show="headings")
-        for key, label, width in zip(columns, ["序号", "ICMP 负载 / B", "IP 总长 / B", "结果", "延迟 / ms", "详情"], [60, 130, 130, 130, 120, 230]):
+        for key, label, width in zip(columns, ["序号", "ICMP 负载 / B", "基础 IP 总长 / B", "结果", "延迟 / ms", "详情"], [60, 125, 140, 145, 110, 360]):
             self.table.heading(key, text=label)
             self.table.column(key, width=width)
         scroll = ttk.Scrollbar(frame, orient="vertical", command=self.table.yview)
@@ -93,25 +103,55 @@ class App(tk.Tk):
             self.group_table.column(key, width=115, anchor="center")
         self.group_table.pack(fill="both", expand=True)
         self.groups = {}
-        ttk.Label(outer, text="总包长 = 负载 + 28 B。20000 B 以上 Ping 可通过 IP 分片与重组完成，不代表路径 MTU 达到该大小。\n超时可能由过滤或拥塞造成；大包成功时同时校验返回负载长度及内容。", wraplength=1080).pack(anchor="w", pady=(12, 0))
+        self.help_text = tk.StringVar()
+        ttk.Label(outer, textvariable=self.help_text, wraplength=1120).pack(anchor="w", pady=(12, 0))
+        self.protocol_changed()
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.after(80, self.poll)
+
+    def protocol_changed(self, event=None):
+        ipv6 = self.protocol_version.get() == 'IPv6'
+        defaults = ('127.0.0.1', '::1')
+        if self.values['host'].get() in defaults:
+            self.values['host'].set(defaults[int(ipv6)])
+        if self.values['lower'].get() in ('576', '1280'):
+            self.values['lower'].set('1280' if ipv6 else '576')
+        if self.values['upper'].get() in ('65528', '65548'):
+            self.values['upper'].set('65548' if ipv6 else '65528')
+        self.df_check.configure(state='disabled' if ipv6 else 'normal')
+        if ipv6:
+            self.df.set(False)
+        self.help_text.set(
+            'IPv6 基础总长 = 负载 + 48 B（不含扩展头）。普通 Ping 由系统管理分片，成功不代表路径 MTU 达到该大小。\nIPv6 MTU 探测禁止源端分片，需要右键 EXE → 以管理员身份运行；超时不能直接判定 MTU 上限。'
+            if ipv6 else
+            'IPv4 总包长 = 负载 + 28 B。大包可通过分片与重组完成，不代表路径 MTU 达到该大小。\n超时可能由过滤或拥塞造成；成功响应校验返回负载长度及内容。')
+
+    def diagnostic_preset(self):
+        if self.running:
+            return
+        self.values['sizes'].set('1400,1452,1500,1600,1650,1700,1750,1800,2000')
+        self.df.set(False)
+        self.status.set('已载入 1600–1800 B 诊断预设；点击“开始数据包测试”')
 
     def preset(self, large):
         if self.running:
             return
-        self.values["sizes"].set("20000,24000,32768,48000,60000,65500" if large else "32,512,1400,1472")
-        self.df.set(False if large else True)
-        self.status.set("已载入大包预设，允许分片；点击“开始数据包测试”" if large else "已载入常规包预设，禁止分片")
+        ipv6 = self.protocol_version.get() == 'IPv6'
+        self.values["sizes"].set("20000,24000,32768,48000,60000,65500" if large else ('32,512,1232,1452' if ipv6 else "32,512,1400,1472"))
+        self.df.set(not large and not ipv6)
+        self.status.set("已载入大包预设；点击“开始数据包测试”" if large else "已载入常规包预设")
 
     def parameters(self, mode):
         p = {k: v.get().strip() for k, v in self.values.items()}
+        p['ip_version'] = 6 if self.protocol_version.get() == 'IPv6' else 4
+        overhead = 48 if p['ip_version'] == 6 else 28
         if not p["host"]:
             raise ValueError("请输入目标地址")
         for key in ("lower", "upper", "count", "interval", "timeout", "attempts"):
             p[key] = int(p[key])
-        if not 28 <= p["lower"] <= p["upper"] <= 65528:
-            raise ValueError("MTU 范围应为 28–65528 字节，下限不得大于上限")
+        minimum = 1280 if p['ip_version'] == 6 else 28
+        if not minimum <= p["lower"] <= p["upper"] <= 65500 + overhead:
+            raise ValueError(f"IPv{p['ip_version']} MTU 范围应为 {minimum}–{65500 + overhead} 字节，下限不得大于上限")
         if not 1 <= p["count"] <= 10000 or not 1 <= p["attempts"] <= 10:
             raise ValueError("次数应为 1–10000，MTU 重试应为 1–10")
         if not 100 <= p["timeout"] <= 60000 or not 0 <= p["interval"] <= 60000:
@@ -119,7 +159,7 @@ class App(tk.Tk):
         p["sizes"] = list(dict.fromkeys(int(s.strip()) for s in p["sizes"].replace("，", ",").split(",")))
         if len(p["sizes"]) > 32 or any(not 0 <= s <= 65500 for s in p["sizes"]):
             raise ValueError("最多输入 32 种包长，每种为 0–65500 字节")
-        p["df"] = self.df.get()
+        p["df"] = self.df.get() if p['ip_version'] == 4 else False
         return p
 
     def start(self, mode):
@@ -142,16 +182,20 @@ class App(tk.Tk):
         self.mtu_button.configure(state="disabled")
         self.packet_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
+        self.protocol_box.configure(state='disabled')
         threading.Thread(target=self.work, args=(mode, p), daemon=True).start()
 
     def work(self, mode, p):
         client = None
         try:
-            client = WindowsPing(p["host"])
+            if p['ip_version'] == 6:
+                client = (WindowsIPv6MTU if mode == 'mtu' else WindowsIPv6Ping)(p['host'])
+            else:
+                client = WindowsPing(p["host"])
             self.events.put(("address", client.address))
             emit = lambda result: self.events.put(("probe", result))
             if mode == "mtu":
-                result = discover_mtu(client.ping, p["lower"], p["upper"], p["attempts"], p["timeout"], self.cancel, emit)
+                result = discover_mtu(client.ping, p["lower"], p["upper"], p["attempts"], p["timeout"], self.cancel, emit, p['ip_version'])
             else:
                 for size in p["sizes"]:
                     for _ in range(p["count"]):
@@ -179,11 +223,11 @@ class App(tk.Tk):
             if kind == "address":
                 self.report["resolved_address"] = value
                 p = self.report['parameters']
-                mode = "禁止分片 DF" if self.report['mode'] == 'mtu' or p['df'] else "允许分片"
-                self.status.set(f"正在测试 {value} · {mode}…")
+                mode = ('禁止源端分片' if self.report['mode'] == 'mtu' else '系统管理源端分片') if p['ip_version'] == 6 else ("禁止分片 DF" if self.report['mode'] == 'mtu' or p['df'] else "允许分片")
+                self.status.set(f"正在测试 IPv{p['ip_version']} {value} · {mode}…")
             elif kind == "probe":
                 self.probes.append(value)
-                labels = {"ok": "成功 / 校验通过", "timeout": "超时", "too_big": "需要分片", "error": "错误", "corrupt": "负载校验失败"}
+                labels = {"ok": "成功 / 校验通过", "timeout": "超时", "too_big": "报文过大 / PTB", "error": "错误", "corrupt": "负载校验失败"}
                 row = self.table.insert("", "end", values=(len(self.probes), value.payload, value.packet_size, labels[value.status], value.rtt_ms if value.rtt_ms is not None else "—", value.detail))
                 self.table.see(row)
                 group = self.groups.setdefault(value.payload, [])
@@ -206,11 +250,13 @@ class App(tk.Tk):
                     largest = max(successful) if successful else None
                     value['largest_successful_payload'] = largest
                     if largest is not None:
-                        value['message'] += f" · 本次已验证最大负载 {largest} B（IP 总长 {largest + 28} B）；仅代表已测试包长"
+                        overhead = 48 if self.report['parameters']['ip_version'] == 6 else 28
+                        value['message'] += f" · 本次已验证最大负载 {largest} B（基础 IP 总长 {largest + overhead} B）；仅代表已测试包长"
                 self.status.set(value["message"])
                 self.mtu_button.configure(state="normal")
                 self.packet_button.configure(state="normal")
                 self.stop_button.configure(state="disabled")
+                self.protocol_box.configure(state='readonly')
         self.after(80, self.poll)
 
     def stop(self):
@@ -227,7 +273,7 @@ class App(tk.Tk):
         try:
             if path.lower().endswith(".csv"):
                 with open(path, "w", encoding="utf-8-sig", newline="") as f:
-                    writer = csv.DictWriter(f, fieldnames=["payload", "packet_size", "status", "rtt_ms", "detail"])
+                    writer = csv.DictWriter(f, fieldnames=["ip_version", "payload", "packet_size", "status", "rtt_ms", "detail"])
                     writer.writeheader()
                     writer.writerows(dict(asdict(p), packet_size=p.packet_size) for p in self.probes)
             else:

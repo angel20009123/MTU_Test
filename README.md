@@ -1,14 +1,14 @@
 # 链路实验室
 
-Windows IPv4 路径 MTU、包长、丢包与延迟测试桌面工具。使用 Python 标准库和 Windows ICMP API，不需要安装依赖，也无需管理员权限。
+Windows IPv4 / IPv6 路径 MTU、包长、丢包与延迟测试桌面工具。使用 Python 标准库和 Windows ICMP API，无需安装运行依赖。普通 Ping 与 IPv4 MTU 探测无需管理员权限；IPv6 MTU 探测需要管理员权限。
 
 ## 启动
 
-当前版本 **1.2.0**：直接运行 `dist/MTU_Link_Tester_v1.2.0.exe`，无需安装 Python。该文件为 Windows x64 单文件桌面程序，包含大包测试预设和新图标。
+当前版本 **1.3.0**：直接运行 `dist/MTU_Link_Tester_v1.3.0.exe`，无需安装 Python。该文件为 Windows x64 单文件桌面程序，包含大包测试预设和新图标。
 
 安装带 Tk 的 Python 3.10 或更高版本，双击 `start.bat`，或执行 `python app.py`。
 
-1. 输入目标 IPv4 地址或域名（域名解析为一个 IPv4 地址）。默认回环地址用于本机自检，不代表外部链路。
+1. 选择 IPv4 或 IPv6，输入对应的地址或域名（域名解析为所选协议的一个地址）。默认回环地址用于本机自检，不代表外部链路。
 2. 点击“探测路径 MTU”：在给定范围内二分探测，始终设置禁止分片 DF。只有明确的“需要分片”响应才缩小上界；超时或其他错误会报告无法确定及已确认的下界。达到设定上限仅说明 MTU 至少为该值。
 3. 点击“开始数据包测试”：按顺序测试每种 ICMP 负载，记录结果和 RTT。可关闭 DF 以允许 IPv4 分片。间隔是每次响应或超时之后的等待时间。
 4. 可随时停止；当前系统调用最多等待设置的超时时间。DNS 解析由系统处理，不能立即取消。
@@ -28,7 +28,21 @@ Windows IPv4 路径 MTU、包长、丢包与延迟测试桌面工具。使用 Py
 - 未成功率包含超时、需要分片及其他错误，因此 MTU 探测的未成功率不能视为网络随机丢包率。
 - RTT 使用 Windows 返回的毫秒值；0 ms 表示低于其计时精度。抖动为相邻成功响应 RTT 差值绝对值的均值。
 - 探测假设链路 MTU 稳定且可通过性随包长单调变化。目标或途中设备过滤 ICMP、限速、路由变化均可能影响结果。
-- 仅测试 IPv4 ICMP，不测 IPv6、TCP/UDP 吞吐量。系统报告的错误码保留在明细中。
+- 支持 IPv4 ICMP 与 IPv6 ICMPv6，不测 TCP/UDP 吞吐量。系统错误码保留在明细中。
+
+## IPv6 测试
+
+选择“IPv6”，输入目标地址，例如 `240b:8044:3000:2:2::701`，再执行数据包测试。支持 IPv6 域名、带方括号的地址、带接口编号的链路本地地址（如 `fe80::1%12`）。可在 PowerShell 使用 `Get-NetIPInterface -AddressFamily IPv6` 查看接口编号。不支持组播和未指定地址作为目标。
+
+“1600–1800 B 诊断”预设覆盖 1400、1452、1500、1600、1650、1700、1750、1800、2000 字节负载；“大包预设”仍支持 20000–65500 字节。IPv6 基础 IP 总长为负载 + 48 字节，不含分片头等扩展头。
+
+普通 IPv6 Ping 使用 `Icmp6SendEcho2`，由 Windows 管理源端分片，IPv4 DF 复选框在 IPv6 下禁用。成功时校验 API 返回的预期负载内容；该 API 不提供独立的实际回包长度字段，因此不宣称独立校验 IPv6 回包长度。详情明确显示此限制。
+
+IPv6 路径 MTU 探测使用原始 ICMPv6 套接字和 `IPV6_DONTFRAG` 禁止源端分片，需右键 EXE →“以管理员身份运行”。权限不足会提示，不会将普通分片 Ping 当作 MTU 探测。MTU 搜索下限至少 1280 字节；收到匹配本次请求的 Packet Too Big 才缩小上界，超时则保留已验证下界并报告无法确定。普通 IPv6 Ping 无需提升权限。
+
+IPv6 中间路由器不分片。大包可达性和禁止分片的路径 MTU 是不同指标；源端分片、ICMPv6 过滤、反向链路或重组问题均可能造成不同包长结果不一致。本工具不会自动修改网卡、路由或防火墙配置。
+
+实现参考：[Windows ICMPv6 API](https://learn.microsoft.com/en-us/windows/win32/api/icmpapi/nf-icmpapi-icmp6sendecho2)、[Windows 原始套接字](https://learn.microsoft.com/en-us/windows/win32/winsock/tcp-ip-raw-sockets-2)。
 
 ## 验证
 
