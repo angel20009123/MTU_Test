@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+mtu_report*.json
+mtu_report*.csv
+build/
+dist/
+*.spec
